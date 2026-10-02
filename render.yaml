@@ -2,10 +2,9 @@ services:
   - type: web
     name: graphmind-api
     runtime: docker
-    plan: 0.5c-512mb
+    plan: starter
     rootDir: backend
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     disk:
       name: graphmind-data
@@ -17,4 +16,4 @@ services:
       - key: TREE_SITTER_CACHE_DIR
         value: /var/data/parsers
       - key: FRONTEND_ORIGIN
-        sync: false
+        value: "*"
