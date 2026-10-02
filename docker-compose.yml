@@ -1,6 +1,7 @@
 services:
-  api:
+  backend:
     build: ./backend
+    container_name: graphmind-backend
     ports:
       - "8000:8000"
     environment:
@@ -18,5 +19,24 @@ services:
       - no-new-privileges:true
     mem_limit: 512m
     cpus: 1.0
+    networks:
+      - graphmind-network
+
+  frontend:
+    build: ./frontend
+    container_name: graphmind-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - graphmind-network
+
 volumes:
   graphmind-data:
+
+networks:
+  graphmind-network:
+    driver: bridge
