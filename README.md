@@ -1,19 +1,25 @@
 # GraphMind
 
 GraphMind is a browser-based code inspector for structural code graphs,
-step-by-step Python tracing, multi-language execution, and empirical complexity
-estimates. It combines a Monaco editor, a React Flow canvas, a variable and
+step-by-step execution tracing, and empirical complexity estimates in eight
+languages. It combines a Monaco editor, a React Flow canvas, a variable and
 call-stack inspector, and a Chart.js benchmark view.
 
 ## What it supports
 
 - **Editor and structural graph:** Python, JavaScript, TypeScript, C, C++, Java,
   Go, and R, parsed with Tree-sitter.
-- **Program execution:** Python, JavaScript, TypeScript, C, C++, Java, Go, and R.
-  The backend captures standard output and errors for every language. Detailed
-  variable-by-variable step tracing and empirical complexity benchmarking are
-  currently available for Python; other languages show their output and any
-  source line reported by the compiler or runtime.
+- **Step-by-step tracing:** Python, JavaScript, TypeScript, C, C++, Java, Go, and R.
+  Every step records the active line, call stack, variables, and all arrays in
+  scope (including 2-D tables), plus which cells the line compares or writes.
+  Python runs under `sys.settrace`; the other languages are instrumented with
+  Tree-sitter (a trace hook is inserted before each statement, on the same line,
+  so compiler messages keep their line numbers) and run with a small per-language
+  runtime in `backend/tracer/runtime/`.
+- **Big-O benchmark (all languages):** GraphMind grows the program's largest
+  numeric array literal (or a size variable named `n`, or a small numeric
+  argument such as `fib(10)`), counts executed statements at each size, and fits
+  O(1) through O(N³) and O(2ᴺ).
 - **Repository import:** Browse supported source files in public GitHub
   repositories and load a selected file into the editor.
 - **Saved sessions:** Store and reopen code and language selections in SQLite.
@@ -52,7 +58,8 @@ npm run dev
 Open <http://localhost:3000>. Stop the services with `Ctrl+C` and
 `docker compose down`.
 
-For a Python-only backend using the local environment, start it in one terminal:
+To run the backend directly (languages whose compiler or runtime is missing
+show a message naming it), start it in one terminal:
 
 ```powershell
 cd backend

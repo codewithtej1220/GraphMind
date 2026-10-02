@@ -49,7 +49,7 @@ export default function CodeEditor({
             <button
               onClick={onRun}
               disabled={isRunning}
-              className="flex items-center gap-1.5 rounded-md bg-signal px-3 py-1.5 text-sm font-medium text-ink-950 transition hover:bg-signal/90 disabled:cursor-not-allowed disabled:opacity-60"
+              className="btn-3d flex items-center gap-1.5 rounded-md bg-signal px-3 py-1.5 text-sm font-semibold text-ink-950 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isRunning ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -80,7 +80,7 @@ export default function CodeEditor({
       </div>
 
       {/* Right: Input/Output Terminal */}
-      <div className="flex w-80 flex-col gap-4">
+      <div className="flex w-80 flex-col gap-4" data-mascot-avoid>
         {/* Input Terminal */}
         <div className="flex flex-1 flex-col rounded-xl border border-ink-700 bg-ink-950 overflow-hidden">
           <div className="flex items-center gap-2 border-b border-ink-700 px-4 py-2.5">
@@ -92,7 +92,7 @@ export default function CodeEditor({
               value={userInput}
               onChange={(e) => onInputChange(e.target.value)}
               aria-label="Program input, one value per line"
-              placeholder="Enter each input value on its own line. Example:\n5\n10\n15"
+              placeholder={"Enter each input value on its own line. Example:\n5\n10\n15"}
               className="h-full w-full resize-none rounded-lg border border-ink-700 bg-ink-900 p-3 font-mono text-xs text-paper placeholder:text-paper/30 focus:outline-none focus:ring-2 focus:ring-signal/50"
             />
           </div>

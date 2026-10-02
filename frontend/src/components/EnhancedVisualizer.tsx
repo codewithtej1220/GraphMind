@@ -13,6 +13,7 @@ import {
   Repeat,
 } from "lucide-react";
 import type { TraceFrame } from "@/lib/types";
+import ArrayInspector from "@/components/ArrayInspector";
 
 interface EnhancedVisualizerProps {
   frames: TraceFrame[];
@@ -20,8 +21,6 @@ interface EnhancedVisualizerProps {
   message: string | null;
   code: string;
 }
-
-const SLOT = 60; // px per array box column, used for pointer x-positioning
 
 const OPERATION_STYLE: Record<
   TraceFrame["operation"],
@@ -101,12 +100,7 @@ export default function EnhancedVisualizer({ frames, supported, message, code }:
 
   const frame = frames[Math.min(index, frames.length - 1)];
   const style = OPERATION_STYLE[frame.operation];
-  const pointerByIndex = new Map<number, string[]>();
-  Object.entries(frame.pointers).forEach(([name, idx]) => {
-    const list = pointerByIndex.get(idx) ?? [];
-    list.push(name);
-    pointerByIndex.set(idx, list);
-  });
+  const previousVariables = index > 0 ? frames[index - 1].variables : {};
   const pointerNames = new Set(Object.keys(frame.pointers));
   const scalarEntries = Object.entries(frame.variables).filter(
     ([name]) => !pointerNames.has(name)
@@ -203,19 +197,29 @@ export default function EnhancedVisualizer({ frames, supported, message, code }:
               <p className="text-xs italic text-paper/30">(none yet)</p>
             ) : (
               <div className="flex flex-wrap gap-2">
-                {scalarEntries.map(([name, value]) => (
-                  <motion.div
-                    key={name}
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ type: "spring", stiffness: 300 }}
-                    className="rounded-lg border-2 border-ink-600 bg-ink-800 px-3 py-1.5 font-mono text-xs shadow-md"
-                  >
-                    <span className="font-bold text-node-call">{name}</span>
-                    <span className="text-paper/50"> = </span>
-                    <span className="font-semibold text-signal">{String(value)}</span>
-                  </motion.div>
-                ))}
+                {scalarEntries.map(([name, value]) => {
+                  const changed = name in previousVariables && JSON.stringify(previousVariables[name]) !== JSON.stringify(value);
+                  const isNew = !(name in previousVariables);
+                  return (
+                    <motion.div
+                      key={name}
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{
+                        scale: changed ? [1, 1.12, 1] : 1,
+                        opacity: 1,
+                        borderColor: changed ? "#e8a33d" : isNew ? "#3fc5b7" : "#333849",
+                      }}
+                      transition={{ duration: 0.35 }}
+                      className="rounded-lg border-2 bg-ink-800 px-3 py-1.5 font-mono text-xs shadow-md"
+                      title={changed ? `changed from ${formatScalar(previousVariables[name])}` : undefined}
+                    >
+                      <span className="font-bold text-node-call">{name}</span>
+                      <span className="text-paper/50"> = </span>
+                      <span className="font-semibold text-signal">{formatScalar(value)}</span>
+                      {changed && <span className="ml-1.5 text-[10px] text-paper/40 line-through">{formatScalar(previousVariables[name])}</span>}
+                    </motion.div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -224,63 +228,14 @@ export default function EnhancedVisualizer({ frames, supported, message, code }:
         {/* Right Column - Array (top) and Code (bottom) */}
         <div className="flex flex-1 flex-col gap-3 overflow-hidden">
           {/* Array Visualization - Top */}
-          <section className="flex flex-col overflow-hidden rounded-xl border border-ink-700 bg-ink-900/50 p-4" style={{ height: '45%' }}>
-            <h3 className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-paper/60">
+          <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-ink-700 bg-ink-900/50 p-4" style={{ height: '58%' }}>
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-paper/60">
               <div className="h-1 w-1 rounded-full bg-signal"></div>
-              {frame.arrayName ? `Array: ${frame.arrayName}` : "Array / List"}
+              Arrays &amp; Lists
             </h3>
-            {frame.arrayState.length === 0 ? (
-              <p className="text-xs italic text-paper/30">(no array/list in scope)</p>
-            ) : (
-              <div className="flex flex-1 items-center justify-center overflow-auto">
-                <div className="relative" style={{ height: 120, minWidth: frame.arrayState.length * SLOT }}>
-                  {/* Animated pointer tags float above the boxes */}
-                  <div className="relative h-7" style={{ width: frame.arrayState.length * SLOT }}>
-                    {Object.entries(frame.pointers).map(([name, idx]) => (
-                      <motion.div
-                        key={name}
-                        className={`absolute top-0 flex -translate-x-1/2 flex-col items-center font-bold ${
-                          ["READ", "WRITE", "COMPARE"].includes(frame.operation) ? style.text : "text-node-loop"
-                        }`}
-                        animate={{ left: idx * SLOT + SLOT / 2 }}
-                        transition={{ type: "spring", stiffness: 280, damping: 24 }}
-                      >
-                        <span className="rounded-md bg-current px-2 py-0.5 text-[10px] font-bold text-ink-950 shadow-lg">
-                          {name}
-                        </span>
-                        <span className="text-sm leading-none">▼</span>
-                      </motion.div>
-                    ))}
-                  </div>
-
-                  <div className="flex gap-2 pt-1" style={{ width: frame.arrayState.length * SLOT }}>
-                    {frame.arrayState.map((value, i) => {
-                      const tags = pointerByIndex.get(i) ?? [];
-                      const isHighlighted = tags.length > 0;
-                      const boxStyle =
-                        isHighlighted && ["READ", "WRITE", "COMPARE"].includes(frame.operation)
-                          ? style.box
-                          : isHighlighted
-                          ? "border-node-loop bg-node-loop/10"
-                          : "border-ink-600 bg-ink-800";
-                      return (
-                        <div key={i} className="flex flex-col items-center gap-1.5" style={{ width: SLOT - 8 }}>
-                          <motion.div
-                            layout
-                            className={`flex h-12 w-12 items-center justify-center rounded-lg border-2 font-mono text-sm font-bold text-paper shadow-md ${boxStyle}`}
-                            animate={isHighlighted ? { scale: [1, 1.12, 1] } : { scale: 1 }}
-                            transition={{ duration: 0.4 }}
-                          >
-                            {String(value)}
-                          </motion.div>
-                          <span className="text-[10px] font-bold text-signal">{i}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
+            <div className="min-h-0 flex-1">
+              <ArrayInspector frames={frames} index={Math.min(index, frames.length - 1)} />
+            </div>
           </section>
 
           {/* Code Panel - Bottom */}
@@ -316,7 +271,7 @@ export default function EnhancedVisualizer({ frames, supported, message, code }:
       </div>
 
       {/* Execution Controls - Bottom Fixed */}
-      <div className="mt-3 flex items-center gap-4 rounded-xl border-2 border-ink-600 bg-ink-900/95 p-3 shadow-lg">
+      <div className="mt-3 flex items-center gap-4 rounded-xl border-2 border-ink-600 bg-ink-900/95 p-3 shadow-lg" data-mascot-avoid>
         {/* Main Controls */}
         <div className="flex items-center gap-2">
           <button
@@ -402,4 +357,13 @@ export default function EnhancedVisualizer({ frames, supported, message, code }:
       </div>
     </div>
   );
+}
+
+function formatScalar(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "object") {
+    const text = JSON.stringify(value);
+    return text.length > 40 ? `${text.slice(0, 39)}…` : text;
+  }
+  return String(value);
 }

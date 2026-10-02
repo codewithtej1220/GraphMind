@@ -23,6 +23,27 @@ export interface TraceFrame {
   pointers: Record<string, number>;
   loop: LoopInfo | null;
   callInfo: CallInfo | null;
+  /** Every list/array in scope (1-D or 2-D), keyed by variable name. */
+  arrays?: Record<string, unknown[]>;
+  /** Cells the active line reads/compares/writes: an index, or [row, col] for 2-D arrays. */
+  accessed?: Record<string, Array<number | [number, number]>>;
+}
+
+export interface Diagnosis {
+  /** Line the error was reported on. */
+  line: number;
+  title: string;
+  explanation: string;
+  /** Source of the line the fix changes (or, with no fix, the error line). */
+  original: string;
+  /** Line the fix replaces ("replace") or inserts before ("insert"). */
+  fixLine: number | null;
+  suggestion: string | null;
+  action: "replace" | "insert" | "none";
+  /** The whole program with the fix applied. */
+  fixedCode: string | null;
+  confidence: "high" | "medium" | "low";
+  message: string;
 }
 
 export interface TraceResult {
@@ -31,6 +52,7 @@ export interface TraceResult {
   frames: TraceFrame[];
   stdout: string;
   error: string | null;
+  diagnosis?: Diagnosis | null;
 }
 
 export interface ComplexityResult {

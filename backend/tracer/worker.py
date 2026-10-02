@@ -5,7 +5,6 @@ import builtins
 import ast
 import io
 import json
-import math
 import re
 import sys
 import os
@@ -105,11 +104,13 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = {name: getattr(builtins, name) for name in names.split()}; allowed["input"] = input_fn
     env: dict[str, Any] = {"__name__": "__main__", "__builtins__": allowed}
     old_stdout, old_trace = sys.stdout, sys.gettrace()
+    count_only = bool(payload.get("count_only"))
     def tracer(frame, event, arg):
         nonlocal steps
         if frame.f_code.co_filename != "<graphmind-user>" or event not in ("call", "line", "return", "exception"): return tracer
         steps += 1
         if steps > int(payload.get("max_steps", 5000)): raise LimitError(f"Execution exceeded {payload.get('max_steps')} traced steps; possible infinite loop.")
+        if count_only: return tracer
         local = {k: v for k, v in frame.f_locals.items() if not k.startswith("__")}
         arrays = [(k,v) for k,v in local.items() if isinstance(v,(list,tuple)) and len(v)<=500]
         array_name, array = arrays[0] if arrays else (None, [])
@@ -144,7 +145,7 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
             current=current.f_back
         stack.reverse()
         description = f"{type(arg[1]).__name__}: {arg[1]}" if event == "exception" and isinstance(arg, tuple) and len(arg) > 1 else f"Step {steps}: {text or event}"
-        frames.append({"step":steps,"activeLine":line,"event":event,"operation":operation,"description":description,"callStack":stack,"variables":{k:safe(v) for k,v in local.items() if not isinstance(v,(list,tuple))},"arrayName":array_name,"arrayState":safe(array),"pointers":pointers,"loop":loop_info,"callInfo":{"function":frame.f_code.co_name,"value":safe(arg)} if event=="return" else None})
+        frames.append({"step":steps,"activeLine":line,"event":event,"operation":operation,"description":description,"callStack":stack,"variables":{k:safe(v) for k,v in local.items() if not isinstance(v,(list,tuple)) and not callable(v)},"arrays":{k:safe(v) for k,v in arrays},"arrayName":array_name,"arrayState":safe(array),"pointers":pointers,"loop":loop_info,"callInfo":{"function":frame.f_code.co_name,"value":safe(arg)} if event=="return" else None})
         if event == "return":
             frame_id = id(frame)
             for key in [key for key in loop_counters if key[0] == frame_id]:
@@ -153,28 +154,21 @@ def execute(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         compile(code,"<graphmind-user>","exec")
         sys.stdout=output; sys.settrace(tracer); exec(compile(code,"<graphmind-user>","exec"),env,env)
-        return {"frames":frames,"stdout":output.getvalue(),"error":None}
+        return {"frames":frames,"stdout":output.getvalue(),"error":None,"steps":steps,"limited":False}
     except SyntaxError as exc:
         error = f"SyntaxError: {exc.msg} (line {exc.lineno})"
         frames.append({"step":len(frames)+1,"activeLine":exc.lineno or 1,"event":"exception","operation":"ERROR","description":error,"callStack":[],"variables":{},"arrayName":None,"arrayState":[],"pointers":{},"loop":None,"callInfo":None})
         return {"frames":frames,"stdout":output.getvalue(),"error":error}
+    except LimitError as exc:
+        if count_only: return {"frames":[],"stdout":"","error":None,"steps":steps,"limited":True}
+        return {"frames":frames,"stdout":output.getvalue(),"error":str(exc)}
     except Exception as exc: return {"frames":frames,"stdout":output.getvalue(),"error":f"{type(exc).__name__}: {exc}"}
     finally: sys.settrace(old_trace); sys.stdout=old_stdout
 
 
-def variation(values: list[float]) -> float:
-    mean=sum(values)/len(values); return math.sqrt(sum((v-mean)**2 for v in values)/len(values))/mean if mean else float("inf")
-def benchmark(payload: dict[str, Any]) -> dict[str, Any]:
-    ns=[]; counts=[]
-    for n in payload["n_values"]:
-        result=execute({**payload,"code":f"n = {n}\nN = {n}\n"+payload["code"]})
-        if result["error"]: return {"n_values":ns,"step_counts":counts,"estimated_big_o":None,"error":f"{result['error']} (while benchmarking N={n})"}
-        ns.append(n); counts.append(len(result["frames"]))
-    models={"O(1)":lambda n:1,"O(log N)":lambda n:math.log2(max(n,2)),"O(N)":lambda n:n,"O(N log N)":lambda n:n*math.log2(max(n,2)),"O(N^2)":lambda n:n*n,"O(N^3)":lambda n:n*n*n}
-    return {"n_values":ns,"step_counts":counts,"estimated_big_o":min(models,key=lambda name:variation([c/models[name](n) for n,c in zip(ns,counts)])),"error":None}
 def main() -> None:
     try:
-        payload=json.loads(sys.stdin.read()); result=benchmark(payload) if payload.get("mode")=="complexity" else execute(payload)
+        payload=json.loads(sys.stdin.read()); result=execute(payload)
     except Exception as exc: result={"error":f"WorkerError: {type(exc).__name__}: {exc}"}
     sys.__stdout__.write(json.dumps(result,ensure_ascii=True))
 if __name__ == "__main__": main()

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GraphMind Standard",
-  description: "Interactive code inspection and execution visualizer",
+  title: "GraphMind — See how your code thinks",
+  description: "Interactive code inspection, step-by-step execution, structure graphs and Big-O benchmarking.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

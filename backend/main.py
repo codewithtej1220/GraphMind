@@ -4,8 +4,8 @@ GraphMind Standard — FastAPI backend.
 Endpoints:
     GET  /api/health          - liveness check
     POST /api/parse           - source code -> {nodes, edges} structural AST graph (all languages)
-    POST /api/trace           - source code -> dynamic execution frames (Python only; others -> supported:false)
-    POST /api/complexity      - source code -> empirical Big-O benchmark (Python only; others -> supported:false)
+    POST /api/trace           - source code -> step-by-step execution frames (all languages)
+    POST /api/complexity      - source code -> empirical Big-O benchmark (all languages)
 
 Run locally:
     uvicorn main:app --reload --port 8000
@@ -84,6 +84,8 @@ class TraceFrame(BaseModel):
     pointers: dict
     loop: LoopInfo | None
     callInfo: CallInfo | None
+    arrays: dict = Field(default_factory=dict)
+    accessed: dict = Field(default_factory=dict)
 
 
 class TraceResponse(BaseModel):
@@ -92,6 +94,7 @@ class TraceResponse(BaseModel):
     frames: list[TraceFrame]
     stdout: str
     error: str | None
+    diagnosis: dict | None = None
 
 
 class ComplexityRequest(BaseModel):

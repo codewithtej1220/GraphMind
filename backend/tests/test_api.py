@@ -27,7 +27,7 @@ class ApiTests(unittest.TestCase):
  def test_trace_input_and_unsupported_language(self):
     result = client.post("/api/trace", json={"code": "x = int(input())\nprint(x + 1)", "language": "python", "input": "4"}).json()
     self.assertTrue(result["supported"]); self.assertEqual(result["stdout"], "5\n"); self.assertIsNone(result["error"])
-    unsupported = client.post("/api/trace", json={"code": "console.log(1)", "language": "javascript"}).json()
+    unsupported = client.post("/api/trace", json={"code": "print 1", "language": "cobol"}).json()
     self.assertFalse(unsupported["supported"]); self.assertEqual(unsupported["frames"], [])
 
 
