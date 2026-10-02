@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { BarChart3, Grid3x3, Rows3 } from "lucide-react";
+import { Rows3 } from "lucide-react";
 import type { TraceFrame } from "@/lib/types";
 
 interface ArrayInspectorProps {
@@ -10,7 +10,6 @@ interface ArrayInspectorProps {
   index: number;
 }
 
-type ViewMode = "bars" | "boxes";
 
 const COLORS = {
   compare: "#f0648c",
@@ -22,7 +21,6 @@ const COLORS = {
 
 const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
 const is2D = (values: unknown[]) => values.length > 0 && values.every((v) => Array.isArray(v));
-const isNumeric = (values: unknown[]) => values.length > 0 && values.every((v) => typeof v === "number");
 
 function arraysOf(frame: TraceFrame): Record<string, unknown[]> {
   if (frame.arrays && Object.keys(frame.arrays).length) return frame.arrays;
@@ -38,12 +36,36 @@ function formatValue(value: unknown): string {
   return text.length > 8 ? `${text.slice(0, 7)}…` : text;
 }
 
+/** A value travelling into cell `to`: from another cell, or dropped in from a variable such as `temp`. */
+interface Move {
+  to: number;
+  from: number | null;
+  variable: string | null;
+  value: unknown;
+}
+
 interface ArrayHistory {
-  /** Stable element ids per frame, so swapped elements visibly move instead of repainting. */
+  /** Stable element ids per frame, so one-step swaps visibly slide instead of repainting. */
   ids: Map<string, number[]>[];
   changed: Map<string, Set<number>>[];
   swapped: Map<string, [number, number]>[];
-  range: Map<string, [number, number]>;
+  moves: Map<string, Move[]>[];
+}
+
+/** Names that usually hold a value being moved around (temp swaps, insertion sort's key). */
+const HOLDER_NAMES = ["temp", "tmp", "t", "swap", "key", "x", "val", "value", "aux", "hold"];
+
+/** Where did the value written into `to` come from? Prefer cells/variables the previous line touched. */
+function sourceOf(to: number, value: unknown, before: unknown[], previous: TraceFrame | undefined, name: string): Move | null {
+  const read = (previous?.accessed?.[name] ?? []).filter((i): i is number => typeof i === "number" && i !== to);
+  const fromCell = read.find((i) => same(before[i], value));
+  if (fromCell !== undefined) return { to, from: fromCell, variable: null, value };
+  const variables = Object.entries(previous?.variables ?? {}).filter(([, v]) => same(v, value));
+  if (variables.length) {
+    const preferred = variables.find(([n]) => HOLDER_NAMES.includes(n)) ?? variables[0];
+    return { to, from: null, variable: preferred[0], value };
+  }
+  return null;
 }
 
 function buildHistory(frames: TraceFrame[]): ArrayHistory {
@@ -51,16 +73,17 @@ function buildHistory(frames: TraceFrame[]): ArrayHistory {
   const prevIds = new Map<string, number[]>();
   const prevValues = new Map<string, unknown[]>();
   // A swap through a temp variable takes two writes, so also compare with a couple of steps back.
-  const recent = new Map<string, { values: unknown[]; ids: number[] }[]>();
-  const range = new Map<string, [number, number]>();
+  const recent = new Map<string, unknown[][]>();
   const ids: ArrayHistory["ids"] = [];
   const changed: ArrayHistory["changed"] = [];
   const swapped: ArrayHistory["swapped"] = [];
+  const moves: ArrayHistory["moves"] = [];
 
-  for (const frame of frames) {
+  frames.forEach((frame, index) => {
     const frameIds = new Map<string, number[]>();
     const frameChanged = new Map<string, Set<number>>();
     const frameSwapped = new Map<string, [number, number]>();
+    const frameMoves = new Map<string, Move[]>();
     for (const [name, values] of Object.entries(arraysOf(frame))) {
       if (!Array.isArray(values)) continue;
       const before = prevValues.get(name);
@@ -72,16 +95,19 @@ function buildHistory(frames: TraceFrame[]): ArrayHistory {
         values.forEach((v, i) => { if (!same(v, before[i])) diff.add(i); });
         const [a, b] = [...diff];
         if (diff.size === 2 && same(before[a], values[b]) && same(before[b], values[a])) {
+          // One-step swap (tuple assignment, destructuring, std::swap): the two blocks trade places.
           [current[a], current[b]] = [current[b], current[a]];
           frameSwapped.set(name, [a, b]);
-        } else if (diff.size === 1) {
+        } else if (diff.size >= 1 && diff.size <= 3 && !is2D(values)) {
+          // Single writes (temp swaps, shifts): show each value travelling to its new cell.
+          const list = [...diff].map((to) => sourceOf(to, values[to], before, frames[index - 1], name)).filter((m): m is Move => m !== null);
+          if (list.length) frameMoves.set(name, list);
+          // The write that completes a temp swap also gets the swap arc.
           for (const snapshot of recent.get(name) ?? []) {
-            if (snapshot.values.length !== values.length) continue;
-            const moved = values.map((_, i) => i).filter((i) => !same(snapshot.values[i], values[i]));
+            if (snapshot.length !== values.length) continue;
+            const moved = values.map((_, i) => i).filter((i) => !same(snapshot[i], values[i]));
             const [x, y] = moved;
-            if (moved.length === 2 && moved.includes(a) && same(snapshot.values[x], values[y]) && same(snapshot.values[y], values[x])) {
-              current = [...snapshot.ids];
-              [current[x], current[y]] = [current[y], current[x]];
+            if (moved.length === 2 && moved.includes(a) && same(snapshot[x], values[y]) && same(snapshot[y], values[x])) {
               frameSwapped.set(name, [x, y]);
               break;
             }
@@ -97,23 +123,19 @@ function buildHistory(frames: TraceFrame[]): ArrayHistory {
       }
       frameIds.set(name, current);
       if (diff.size) frameChanged.set(name, diff);
-      if (before && beforeIds) recent.set(name, [{ values: before, ids: beforeIds }, ...(recent.get(name) ?? [])].slice(0, 3));
+      if (before) recent.set(name, [before, ...(recent.get(name) ?? [])].slice(0, 3));
       prevIds.set(name, current);
       prevValues.set(name, values);
-      if (isNumeric(values)) {
-        const [lo, hi] = range.get(name) ?? [0, 0];
-        range.set(name, [Math.min(lo, ...(values as number[])), Math.max(hi, ...(values as number[]))]);
-      }
     }
     ids.push(frameIds);
     changed.push(frameChanged);
     swapped.push(frameSwapped);
-  }
-  return { ids, changed, swapped, range };
+    moves.push(frameMoves);
+  });
+  return { ids, changed, swapped, moves };
 }
 
 export default function ArrayInspector({ frames, index }: ArrayInspectorProps) {
-  const [mode, setMode] = useState<ViewMode>("bars");
   const [pinned, setPinned] = useState<string | null>(null);
   const history = useMemo(() => buildHistory(frames), [frames]);
 
@@ -153,21 +175,6 @@ export default function ArrayInspector({ frames, index }: ArrayInspectorProps) {
         </div>
         <div className="flex items-center gap-3">
           <Legend />
-          {!is2D(values) && isNumeric(values) && (
-            <div className="flex rounded-lg border border-ink-700 bg-ink-950 p-0.5" role="group" aria-label="Array view">
-              {([["bars", BarChart3], ["boxes", Grid3x3]] as const).map(([id, Icon]) => (
-                <button
-                  key={id}
-                  onClick={() => setMode(id)}
-                  aria-pressed={mode === id}
-                  title={id === "bars" ? "Bars" : "Boxes"}
-                  className={`rounded-md p-1 transition ${mode === id ? "bg-ink-700 text-paper" : "text-paper/40 hover:text-paper/70"}`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
 
@@ -185,8 +192,8 @@ export default function ArrayInspector({ frames, index }: ArrayInspectorProps) {
             accessed={accessed as number[]}
             isCompare={isCompare}
             pointers={frame.arrayName === primary ? frame.pointers : {}}
-            range={history.range.get(primary)}
-            mode={isNumeric(values) ? mode : "boxes"}
+            moves={history.moves[index].get(primary) ?? []}
+            step={index}
           />
         )}
       </div>
@@ -250,20 +257,21 @@ interface StripProps {
   accessed: number[];
   isCompare: boolean;
   pointers: Record<string, number>;
-  range?: [number, number];
-  mode: ViewMode;
+  moves: Move[];
+  /** Current step, so the travel animation replays whenever you land on this step. */
+  step: number;
 }
 
-function Strip({ name, values, ids, changed, swapped, accessed, isCompare, pointers, range, mode }: StripProps) {
+/** Fixed-size blocks in a row, with pointer tags above and indexes below. */
+function Strip({ name, values, ids, changed, swapped, accessed, isCompare, pointers, moves, step }: StripProps) {
   const count = values.length;
-  const compact = count > 32;
+  const slot = count > 16 ? 44 : 60; // px per element column
+  const box = slot - 12;
+  const width = count * slot;
   const accessedSet = new Set(accessed);
-  const [lo, hi] = range ?? [0, 1];
-  const span = Math.max(hi - lo, 1e-9);
-  const baseline = hi <= 0 ? 0 : lo >= 0 ? 1 : hi / span; // fraction from the top where zero sits
   const pointerGroups = new Map<number, string[]>();
   Object.entries(pointers).forEach(([pointer, idx]) => pointerGroups.set(idx, [...(pointerGroups.get(idx) ?? []), pointer]));
-  const colWidth = `${100 / Math.max(count, 1)}%`;
+  const center = (i: number) => i * slot + slot / 2;
 
   const tone = (i: number) => {
     if (swapped && (i === swapped[0] || i === swapped[1])) return COLORS.swap;
@@ -273,121 +281,102 @@ function Strip({ name, values, ids, changed, swapped, accessed, isCompare, point
   };
 
   return (
-    <div className="flex h-full min-h-[150px] min-w-full flex-col" style={{ minWidth: compact ? count * 10 : count * 40 }}>
-      {/* Pointer labels */}
-      <div className="relative h-7 shrink-0">
-        {[...pointerGroups.entries()].map(([idx, labels]) => (
-          <motion.div
-            key={labels.join(",")}
-            className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
-            initial={false}
-            animate={{ left: `${((idx + 0.5) / count) * 100}%` }}
-            transition={{ type: "spring", stiffness: 300, damping: 26 }}
-          >
-            <span className="whitespace-nowrap rounded px-1.5 py-px font-mono text-[10px] font-bold text-ink-950 shadow" style={{ background: COLORS.pointer }}>
-              {labels.join(" ")}
-            </span>
-            <span className="text-[10px] leading-none" style={{ color: COLORS.pointer }}>▼</span>
-          </motion.div>
-        ))}
-      </div>
+    <div className="flex h-full min-h-[120px] items-center">
+      <div className="relative mx-auto shrink-0" style={{ width }}>
+        {/* Pointer tags */}
+        <div className="relative h-8">
+          {[...pointerGroups.entries()].map(([idx, labels]) => (
+            <motion.div
+              key={labels.join(",")}
+              className="absolute top-0 flex -translate-x-1/2 flex-col items-center"
+              initial={false}
+              animate={{ left: center(idx) }}
+              transition={{ type: "spring", stiffness: 300, damping: 26 }}
+            >
+              <span className="whitespace-nowrap rounded-md px-2 py-0.5 font-mono text-[10px] font-bold text-ink-950 shadow-lg" style={{ background: COLORS.pointer }}>
+                {labels.join(" ")}
+              </span>
+              <span className="text-sm leading-none" style={{ color: COLORS.pointer }}>▼</span>
+            </motion.div>
+          ))}
+        </div>
 
-      {/* Swap arc */}
-      <div className="relative h-8 shrink-0">
-        {swapped && (
-          <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden>
+        {/* Swap arc */}
+        <svg className="pointer-events-none absolute left-0 top-6 overflow-visible" width={width} height={18} aria-hidden>
+          {swapped && (
             <motion.path
               key={`${name}-${swapped.join("-")}`}
-              d={`M ${((swapped[0] + 0.5) / count) * 100} 31 C ${((swapped[0] + 0.5) / count) * 100} 2, ${((swapped[1] + 0.5) / count) * 100} 2, ${((swapped[1] + 0.5) / count) * 100} 31`}
+              d={`M ${center(swapped[0])} 18 C ${center(swapped[0])} -6, ${center(swapped[1])} -6, ${center(swapped[1])} 18`}
               fill="none"
               stroke={COLORS.swap}
               strokeWidth={2}
-              vectorEffect="non-scaling-stroke"
               strokeDasharray="4 3"
               initial={{ pathLength: 0, opacity: 0 }}
               animate={{ pathLength: 1, opacity: 1 }}
               transition={{ duration: 0.45 }}
             />
-          </svg>
-        )}
-      </div>
+          )}
+        </svg>
 
-      {/* Elements */}
-      <div className={`relative flex min-h-0 flex-1 ${mode === "bars" ? "items-stretch" : "items-center"}`}>
-        {mode === "bars" && lo < 0 && (
-          <div className="pointer-events-none absolute inset-x-0 border-t border-dashed border-ink-600" style={{ top: `${baseline * 100}%` }} />
-        )}
-        {values.map((value, i) => {
-          const color = tone(i);
-          const pointed = pointerGroups.has(i);
-          return (
-            <motion.div
-              key={ids[i] ?? i}
-              layout
-              transition={{ type: "spring", stiffness: 260, damping: 26 }}
-              className="flex h-full flex-col items-center justify-end"
-              style={{ width: colWidth, paddingInline: compact ? 1 : 3 }}
-            >
-              {mode === "bars" ? (
-                <BarCell value={value as number} lo={lo} span={span} baseline={baseline} color={color} pointed={pointed} compact={compact} />
-              ) : (
-                <BoxCell value={value} color={color} pointed={pointed} />
-              )}
-              {!compact && <span className={`mt-1 font-mono text-[10px] ${pointed ? "font-bold text-node-variable" : "text-paper/35"}`}>{i}</span>}
-            </motion.div>
-          );
-        })}
+        {/* Blocks */}
+        <div className="relative flex pt-2">
+          {values.map((value, i) => {
+            const color = tone(i);
+            const pointed = pointerGroups.has(i);
+            return (
+              <motion.div
+                key={ids[i] ?? i}
+                layout
+                transition={{ type: "spring", stiffness: 260, damping: 26 }}
+                className="flex flex-col items-center gap-1.5"
+                style={{ width: slot }}
+              >
+                <BoxCell value={value} color={color} pointed={pointed} size={box} />
+                <span className={`font-mono text-[10px] font-bold ${pointed ? "text-node-variable" : "text-signal/80"}`}>{i}</span>
+              </motion.div>
+            );
+          })}
+          {/* Values travelling into their new cells (copies, temp swaps, shifts). */}
+          {moves.map((move) => {
+            const left = center(move.to) - box / 2;
+            const fromLeft = move.from !== null ? center(move.from) - box / 2 : left;
+            return (
+              <motion.div
+                key={`${step}-${move.to}`}
+                className="pointer-events-none absolute top-2 z-10 flex flex-col items-center"
+                style={{ left: 0, width: box }}
+                initial={{ x: fromLeft, y: move.from !== null ? 0 : -46, opacity: 0.95 }}
+                animate={{ x: left, y: move.from !== null ? [0, -30, 0] : 0, opacity: [0.95, 0.95, 0] }}
+                transition={{ duration: 0.75, ease: "easeInOut", times: [0, 0.75, 1] }}
+              >
+                <div
+                  className="flex items-center justify-center rounded-lg border-2 border-dashed font-mono font-bold text-ink-950"
+                  style={{ width: box, height: box, background: COLORS.changed, borderColor: "#fff6", fontSize: box > 40 ? 14 : 12, boxShadow: `0 8px 22px -6px ${COLORS.changed}` }}
+                >
+                  {formatValue(move.value)}
+                </div>
+                {move.variable && (
+                  <span className="mt-0.5 rounded bg-ink-950/90 px-1 font-mono text-[9px] text-signal">from {move.variable}</span>
+                )}
+              </motion.div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
 }
 
-function BarCell({ value, lo, span, baseline, color, pointed, compact }: { value: number; lo: number; span: number; baseline: number; color: string | null; pointed: boolean; compact: boolean }) {
-  const height = (Math.abs(value) / span) * 100;
-  const negative = value < 0 && lo < 0;
-  const fill = color ?? "#3a3f58";
-  return (
-    <div className="relative mt-4 w-full flex-1">
-      <motion.div
-        className="absolute inset-x-0 rounded-t-md"
-        initial={false}
-        animate={{
-          height: `${Math.max(height, 1.5)}%`,
-          backgroundColor: fill,
-          boxShadow: color ? `0 0 16px -2px ${color}` : "inset 0 1px 0 rgba(255,255,255,0.12)",
-        }}
-        transition={{ type: "spring", stiffness: 240, damping: 24 }}
-        style={{
-          [negative ? "top" : "bottom"]: `${(negative ? baseline : 1 - baseline) * 100}%`,
-          borderRadius: negative ? "0 0 6px 6px" : "6px 6px 0 0",
-          outline: pointed ? `1.5px solid ${COLORS.pointer}` : undefined,
-          outlineOffset: 1,
-          backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.18), rgba(0,0,0,0.12))",
-        }}
-      >
-        {!compact && (
-          // Sits just outside the bar's end so even tiny bars stay readable.
-          <span
-            className="absolute inset-x-0 text-center font-mono text-[10px] font-semibold"
-            style={{ [negative ? "top" : "bottom"]: "100%", color: color ?? "rgba(238,240,245,0.75)", paddingBlock: 2 }}
-          >
-            {formatValue(value)}
-          </span>
-        )}
-      </motion.div>
-    </div>
-  );
-}
-
-function BoxCell({ value, color, pointed }: { value: unknown; color: string | null; pointed: boolean }) {
+function BoxCell({ value, color, pointed, size }: { value: unknown; color: string | null; pointed: boolean; size: number }) {
   return (
     <motion.div
-      className="flex aspect-square w-full max-w-14 items-center justify-center rounded-lg border-2 font-mono text-sm font-bold text-paper"
+      className="flex items-center justify-center rounded-lg border-2 font-mono font-bold text-paper"
+      style={{ width: size, height: size, fontSize: size > 40 ? 14 : 12 }}
       initial={false}
       animate={{
         borderColor: color ?? (pointed ? COLORS.pointer : "#333849"),
         backgroundColor: color ? `${color}2e` : "#191c26",
-        scale: color ? 1.08 : 1,
+        scale: color ? 1.1 : 1,
         boxShadow: color ? `0 0 18px -4px ${color}, 0 4px 0 rgba(0,0,0,0.4)` : "0 4px 0 rgba(0,0,0,0.4)",
       }}
       transition={{ type: "spring", stiffness: 300, damping: 22 }}
