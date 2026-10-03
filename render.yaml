@@ -14,6 +14,6 @@ services:
       - key: DATABASE_PATH
         value: /var/data/graphmind.db
       - key: TREE_SITTER_CACHE_DIR
-        value: /var/data/parsers
+        value: /tmp/tree-sitter
       - key: FRONTEND_ORIGIN
         value: "https://graph-mind-m5tfx1de9-juzt-none.vercel.app,*"

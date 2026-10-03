@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONIOENCODING=utf-8 \
     HOME=/tmp \
     GOCACHE=/tmp/go-cache \
-    GOMODCACHE=/tmp/go-mod-cache
+    GOMODCACHE=/tmp/go-mod-cache \
+    TREE_SITTER_CACHE_DIR=/tmp/tree-sitter
 
 WORKDIR /app
 RUN addgroup --system graphmind && adduser --system --ingroup graphmind --home /app graphmind
@@ -16,6 +17,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY --chown=graphmind:graphmind . .
 RUN mkdir -p /app/data && chown -R graphmind:graphmind /app
+RUN mkdir -p /tmp/tree-sitter && chown -R graphmind:graphmind /tmp
 USER graphmind
 
 ENV DATABASE_PATH=/app/data/graphmind.db
